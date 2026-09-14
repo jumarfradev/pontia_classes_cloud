@@ -1,11 +1,11 @@
-# Laboratorio 1: RAG con Kendra y Bedrock (AWS CDK)
+# Laboratorio 1: RAG con Bedrock Knowledge Base (AWS CDK)
 
 ## 📋 Resumen del Despliegue
 
 Este laboratorio despliega una aplicación RAG completa usando **AWS CDK con despliegue stack a stack**:
 
 1. **Storage Stack** - S3 + DynamoDB (2-3 min)
-2. **Kendra Stack** - Kendra Index + Data Source (5-10 min)
+2. **Knowledge Base Stack** - Bedrock Knowledge Base + S3 Data Source (5-10 min)
 3. **Lambda Stack** - Upload + Query Functions (2-3 min)
 4. **API Stack** - API Gateway REST (2-3 min)
 5. **Frontend Stack** - S3 Static Hosting (1-2 min)
@@ -23,15 +23,15 @@ Este laboratorio despliega una aplicación RAG completa usando **AWS CDK con des
 - **Frontend**: Aplicación web interactiva (HTML/CSS/JavaScript)
 - **API Gateway**: Endpoints REST para upload y query
 - **Lambda Functions**: Procesamiento de documentos y búsqueda RAG
-- **Kendra**: Indexación semántica de documentos PDF
-- **Bedrock**: Generación de respuestas con IA (Titan Text)
+- **Bedrock Knowledge Base**: Indexación semántica de documentos (reemplaza a Kendra)
+- **Bedrock**: Generación de respuestas con IA (Claude 3 Haiku / modelo configurable)
 - **S3**: Almacenamiento de documentos y frontend estático
 - **DynamoDB**: Metadata de documentos y historial de consultas
 
 ### Flujo de Datos
 
 ```
-Usuario → Frontend → API Gateway → Lambda → (Kendra + Bedrock) → DynamoDB
+Usuario → Frontend → API Gateway → Lambda → (Bedrock Knowledge Base + Bedrock) → DynamoDB
 ```
 
 ---
@@ -45,7 +45,7 @@ Para desplegar toda la aplicación de una vez:
 cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno" --require-approval never
 ```
 
-**Tiempo total:** ~15-20 minutos
+**Tiempo total:** ~15-25 minutos
 
 ---
 
@@ -174,25 +174,25 @@ cdk deploy --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack storage" 
 - S3 Bucket para documentos: `rag-lab-alumno-documents-{ACCOUNT_ID}`
 - DynamoDB Table: `rag-lab-alumno-documents`
 - DynamoDB Table: `rag-lab-alumno-queries`
-- IAM Role para Kendra con permisos CloudWatch Logs
 
 **Tiempo:** ~2-3 minutos
 
 > **✅ Resultado:** Storage desplegado correctamente.
 
-#### 7.2 – Desplegar Kendra Stack
+#### 7.2 – Desplegar Knowledge Base Stack
 
 ```bash
-cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack kendra" --require-approval never
+cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack knowledgebase" --require-approval never
 ```
 
 **Qué se crea:**
-- Kendra Index: `rag-lab-alumno-index` (Developer Edition)
-- Data Source (S3): `rag-lab-alumno-s3-source` con schedule automático
+- Bedrock Knowledge Base: `rag-lab-alumno-kb` con embeddings Titan Embed Text v2
+- OpenSearch Serverless collection e índice vectorial (creados automáticamente por el construct)
+- S3 Data Source: `rag-lab-alumno-documents` apuntando al prefijo `documents/`
 
-**Tiempo:** ~5-10 minutos (Kendra tarda más en crearse)
+**Tiempo:** ~5-10 minutos (OpenSearch Serverless y Bedrock Knowledge Base tardan más en crearse)
 
-> **✅ Resultado:** Kendra Index creado y listo para indexar documentos.
+> **✅ Resultado:** Knowledge Base creada y lista para indexar documentos.
 
 #### 7.3 – Desplegar Lambda Stack
 
@@ -201,9 +201,9 @@ cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack lam
 ```
 
 **Qué se crea:**
-- Lambda Function: `rag-lab-alumno-upload` - Procesa uploads de PDF
-- Lambda Function: `rag-lab-alumno-query` - Búsqueda + generación con Bedrock
-- IAM Role con permisos para S3, DynamoDB, Kendra y Bedrock
+- Lambda Function: `rag-lab-alumno-upload` - Procesa uploads de PDF y lanza ingestion job
+- Lambda Function: `rag-lab-alumno-query` - Búsqueda + generación con Bedrock Knowledge Base
+- IAM Role con permisos para S3, DynamoDB, Bedrock Agent y Bedrock Agent Runtime
 
 **Tiempo:** ~2-3 minutos
 
@@ -238,7 +238,7 @@ cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack fro
 ```
 
 Este comando:
-- S3 Bucket para frontend: `rag-lab-alumno-frontend-{ACCOUNT_ID}`
+- Crea S3 Bucket para frontend: `rag-lab-alumno-frontend-{ACCOUNT_ID}`
 - Sube el frontend (`index.html`, `styles.css`, `app.js`) al bucket S3
 - Inyecta automáticamente la URL del API Gateway en el frontend
 - Configura el website hosting en S3
@@ -246,7 +246,7 @@ Este comando:
 **Qué se crea:**
 - Website configuration en S3
 - Archivos frontend subidos con preguntas sugeridas
-- config.json con la URL del API Gateway
+- `config.json` con la URL del API Gateway
 
 **Tiempo:** ~1-2 minutos
 
@@ -282,19 +282,22 @@ Este comando:
 > **✅ Resultado esperado:**
 > - El documento se sube a S3
 > - Se registra en DynamoDB con status "processing"
-> - Lambda procesa y actualiza a "completed"
+> - Lambda lanza un *ingestion job* en Bedrock Knowledge Base
+> - El estado cambiará a "completed" una vez finalice la indexación
 
 #### 10.2 – Realizar una búsqueda
+
+> **⚠️ Importante:** Bedrock Knowledge Base necesita unos minutos para indexar el documento tras subirlo. Puedes revisar el estado en la consola de Bedrock → Knowledge bases → Data source → Sync history.
 
 1. En el panel **💬 Chat RAG**:
    - Usa las preguntas sugeridas o escribe tu propia pregunta
    - Ejemplo: "¿Cuál es la tasa de desempleo juvenil en España?"
 2. Haz clic en **Enviar** o presiona Enter.
-3. La aplicación buscará en Kendra y generará respuesta con Bedrock
+3. La aplicación consulta Bedrock Knowledge Base y genera la respuesta con Bedrock.
 
 > **✅ Resultado esperado:**
-> - Kendra busca documentos similares (o fallback a S3 directo)
-> - Bedrock genera respuesta contextualizada
+> - Bedrock KB recupera los fragmentos de documentos más relevantes
+> - Bedrock genera una respuesta contextualizada
 > - Se muestra la respuesta con fuentes citadas
 
 ---
@@ -325,25 +328,27 @@ Este comando:
 - **Upload Lambda**:
   - Procesa archivos PDF subidos
   - Guarda en S3 y registra metadata en DynamoDB
-  - Maneja errores de serialización (Decimal → JSON)
+  - Lanza un `StartIngestionJob` en Bedrock Knowledge Base
 - **Query Lambda**:
-  - Busca en Kendra (con fallback a S3 directo)
-  - Construye contexto e invoca Bedrock Titan Text
-  - Genera respuestas con fuentes citadas
+  - Consulta Bedrock Knowledge Base con `RetrieveAndGenerate`
+  - Recibe respuestas con citas de fuentes
   - Guarda historial en DynamoDB
 
-#### 4. **Kendra - Búsqueda Semántica**
-- **Propósito**: Indexación y búsqueda semántica de documentos
+#### 4. **Bedrock Knowledge Base - Búsqueda Semántica**
+- **Propósito**: Indexación y búsqueda semántica de documentos (reemplaza a Amazon Kendra)
 - **Configuración**:
-  - Developer Edition (más económica)
-  - Data Source S3 con sincronización automática cada 6 horas
-  - Soporte para PDF con extracción de texto
-  - Fallback a búsqueda directa en S3 cuando Kendra no encuentra resultados
+  - Modelo de embeddings: `Amazon Titan Embed Text v2`
+  - Vector store: OpenSearch Serverless (creado automáticamente)
+  - Data Source S3 con prefijo `documents/`
+  - Sincronización manual o mediante ingestion job desde Lambda
+- **Ventaja**: Integración nativa con Bedrock para retrieve + generate
 
 #### 5. **Bedrock - Generación de IA**
 - **Propósito**: Generación de respuestas con lenguaje natural
-- **Modelo**: Titan Text (alternativa a Claude 3)
-- **Función**: Procesa el contexto de Kendra/S3 y genera respuestas coherentes
+- **Modelo**: `Amazon Nova 2 Lite` (versión del inference profile `eu.amazon.nova-2-lite-v1:0`, configurable en `lambdas/query_handler.py`)
+- **Función**: Procesa el contexto recuperado por Bedrock KB y genera respuestas coherentes
+
+> **Nota sobre modelos:** Muchas regiones de AWS (incluido `eu-west-1`) requieren usar el **ID del inference profile** en lugar del ID del foundation model para evitar errores de *on-demand throughput*. El valor por defecto usa el inference profile `eu.amazon.nova-2-lite-v1:0`. Si necesitas cambiarlo, busca primero los perfiles disponibles con `aws bedrock list-inference-profiles --region eu-west-1` y actualiza `GENERATION_MODEL_ID` en `lambdas/query_handler.py`.
 
 #### 6. **S3 - Almacenamiento**
 - **Bucket de Documentos**: Almacena archivos PDF originales
@@ -360,7 +365,7 @@ Este comando:
 #### AWS Management Console
 
 1. **CloudFormation**
-   - Busca los stacks: `rag-lab-alumno-storage`, `rag-lab-alumno-kendra`, etc.
+   - Busca los stacks: `rag-lab-alumno-storage`, `rag-lab-alumno-kb`, etc.
    - Revisa los outputs y recursos creados
 
 2. **S3**
@@ -381,9 +386,9 @@ Este comando:
    - API: `rag-lab-alumno-api` - endpoints y configuración
    - Testea los endpoints directamente desde la consola
 
-6. **Kendra**
-   - Índice: `rag-lab-alumno-index` - estado y métricas
-   - Data Source: `rag-lab-alumno-s3-source` - sincronización
+6. **Bedrock → Knowledge bases**
+   - Knowledge Base: `rag-lab-alumno-kb`
+   - Revisa el estado, el data source y el historial de sincronizaciones
 
 7. **CloudWatch**
    - Logs de Lambda para debugging
@@ -392,8 +397,21 @@ Este comando:
 #### Comandos AWS CLI Útiles
 
 ```bash
-# Verificar Kendra
-aws kendra describe-index --id KENDRA_INDEX_ID --region eu-west-1
+# Verificar Knowledge Base
+data_source_id=$(aws cloudformation describe-stacks \
+  --stack-name rag-lab-alumno-kb \
+  --query 'Stacks[0].Outputs[?OutputKey==`DataSourceId`].OutputValue' \
+  --output text --region eu-west-1)
+kb_id=$(aws cloudformation describe-stacks \
+  --stack-name rag-lab-alumno-kb \
+  --query 'Stacks[0].Outputs[?OutputKey==`KnowledgeBaseId`].OutputValue' \
+  --output text --region eu-west-1)
+
+# Listar ingestion jobs
+aws bedrock-agent list-ingestion-jobs \
+  --knowledge-base-id "$kb_id" \
+  --data-source-id "$data_source_id" \
+  --region eu-west-1
 
 # Listar documentos en DynamoDB
 aws dynamodb scan --table-name rag-lab-alumno-documents --region eu-west-1
@@ -403,12 +421,6 @@ aws dynamodb scan --table-name rag-lab-alumno-queries --region eu-west-1
 
 # Revisar logs de Lambda
 aws logs tail /aws/lambda/rag-lab-alumno-query --follow --region eu-west-1
-
-# Forzar sincronización de Kendra
-aws kendra start-data-source-sync-job \
-  --id DATA_SOURCE_ID \
-  --index-id KENDRA_INDEX_ID \
-  --region eu-west-1
 ```
 
 ### 🎯 Flujo Completo de una Consulta RAG
@@ -416,14 +428,11 @@ aws kendra start-data-source-sync-job \
 1. **Usuario** escribe pregunta en el frontend
 2. **Frontend** envía a API Gateway (`POST /query`)
 3. **API Gateway** invoca Lambda Query
-4. **Lambda** busca en Kendra Index
-5. **Kendra** retorna documentos relevantes (o vacío)
-6. **Lambda** (fallback) busca directamente en S3 si Kendra no encuentra
-7. **Lambda** construye contexto con documentos encontrados
-8. **Lambda** invoca Bedrock Titan Text con contexto
-9. **Bedrock** genera respuesta contextualizada
-10. **Lambda** guarda consulta en DynamoDB
-11. **Frontend** muestra respuesta con fuentes
+4. **Lambda** llama a `bedrock-agent-runtime.retrieve_and_generate` con la Knowledge Base
+5. **Bedrock Knowledge Base** recupera fragmentos relevantes de los documentos indexados
+6. **Bedrock** genera respuesta contextualizada con citas
+7. **Lambda** guarda consulta en DynamoDB
+8. **Frontend** muestra respuesta con fuentes
 
 ---
 
@@ -436,20 +445,35 @@ aws kendra start-data-source-sync-job \
 cdk bootstrap aws://ACCOUNT_ID/eu-west-1
 ```
 
-### Error: "Bedrock model not found"
+### Error: "Bedrock model not found" / "Model is marked by provider as Legacy" / "on-demand throughput isn’t supported"
 
 **Solución:** Verifica que Bedrock esté habilitado en tu región:
 ```bash
 aws bedrock list-foundation-models --region eu-west-1
+aws bedrock list-inference-profiles --region eu-west-1
 ```
 
-### Kendra no indexa documentos
+Asegúrate de tener acceso concedido a:
+- `Amazon Titan Embed Text v2` (embeddings)
+- El modelo de generación configurado en `lambdas/query_handler.py`
 
-**Solución:** Inicia sincronización manual:
+En `eu-west-1`, muchos modelos requieren el **ID del inference profile** (p. ej. `eu.amazon.nova-2-lite-v1:0`). Si ves errores de *Legacy* o *on-demand throughput*, actualiza `GENERATION_MODEL_ID` en `lambdas/query_handler.py` con un inference profile activo y redepliega:
 ```bash
-aws kendra start-data-source-sync-job \
-  --id DATA_SOURCE_ID \
-  --index-id KENDRA_INDEX_ID \
+cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack lambdas"
+```
+
+### Bedrock Knowledge Base no indexa documentos
+
+**Solución:** Lanza la sincronización manualmente desde la consola de Bedrock:
+1. Bedrock → Knowledge bases → `rag-lab-alumno-kb`
+2. Selecciona el Data Source
+3. Haz clic en **Sync**
+
+O usa AWS CLI:
+```bash
+aws bedrock-agent start-ingestion-job \
+  --knowledge-base-id KB_ID \
+  --data-source-id DATA_SOURCE_ID \
   --region eu-west-1
 ```
 
@@ -471,7 +495,7 @@ Para eliminar todos los recursos creados:
 cdk destroy --app "python3 cdk_app.py --lab-name rag-lab-alumno"
 ```
 
-> **👉 Nota:** CDK eliminará automáticamente todos los recursos (Kendra, Lambda, DynamoDB, API Gateway, S3, IAM roles, etc.).
+> **👉 Nota:** CDK eliminará automáticamente todos los recursos (Knowledge Base, OpenSearch Serverless, Lambda, DynamoDB, API Gateway, S3, IAM roles, etc.).
 
 ---
 
@@ -480,8 +504,8 @@ cdk destroy --app "python3 cdk_app.py --lab-name rag-lab-alumno"
 Al finalizar este laboratorio, cada alumno debe haber:
 
 - ✅ **Desplegado** una aplicación RAG completa con AWS CDK
-- ✅ **Configurado** Kendra para búsqueda semántica con fallback robusto
-- ✅ **Integrado** Bedrock Titan Text para generación de respuestas
+- ✅ **Configurado** Bedrock Knowledge Base para búsqueda semántica
+- ✅ **Integrado** Bedrock para generación de respuestas
 - ✅ **Creado** una interfaz web moderna con preguntas sugeridas
 - ✅ **Procesado** documentos PDF con metadata en DynamoDB
 - ✅ **Implementado** búsqueda RAG con fuentes citadas

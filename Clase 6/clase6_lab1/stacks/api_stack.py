@@ -1,6 +1,6 @@
 """
 API Stack - API Gateway
-Crea el API Gateway REST con endpoints para upload y query
+Crea el API Gateway REST con endpoints para upload y query (Bedrock Knowledge Base)
 """
 
 import aws_cdk as cdk
@@ -32,7 +32,7 @@ class ApiStack(cdk.Stack):
             self,
             "RagApi",
             rest_api_name=f"{lab_name}-api",
-            description="RAG API con Kendra y Bedrock",
+            description="RAG API con Bedrock Knowledge Base y Bedrock",
             binary_media_types=["application/pdf", "application/octet-stream"],
             default_cors_preflight_options=apigateway.CorsOptions(
                 allow_origins=["*"],

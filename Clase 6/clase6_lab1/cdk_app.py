@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 RAG Lab - AWS CDK Application
-Despliegue completo de una aplicación RAG con Kendra, Lambda, API Gateway y Bedrock
+Despliegue completo de una aplicación RAG con Bedrock Knowledge Base, Lambda, API Gateway y Bedrock
 """
 
 import aws_cdk as cdk
@@ -9,7 +9,7 @@ import sys
 import argparse
 from aws_cdk import aws_s3 as s3
 from stacks.storage_stack import StorageStack
-from stacks.kendra_stack import KendraStack
+from stacks.knowledge_base_stack import KnowledgeBaseStack
 from stacks.lambda_stack import LambdaStack
 from stacks.api_stack import ApiStack
 from stacks.frontend_stack import FrontendStack
@@ -41,40 +41,38 @@ class RagLabApp(cdk.App):
                 lab_name=lab_name,
                 env=cdk.Environment(region=region)
             )
-        elif self.specific_stack == "kendra":
-            # Para Kendra necesitamos el storage primero
+        elif self.specific_stack == "knowledgebase":
+            # Para Bedrock Knowledge Base necesitamos el storage primero
             storage_stack = StorageStack(
                 self,
                 f"{lab_name}-storage",
                 lab_name=lab_name,
                 env=cdk.Environment(region=region)
             )
-            kendra_stack = KendraStack(
+            kb_stack = KnowledgeBaseStack(
                 self,
-                f"{lab_name}-kendra",
+                f"{lab_name}-kb",
                 lab_name=lab_name,
                 documents_bucket=storage_stack.documents_bucket,
-                kendra_role=storage_stack.kendra_role,
                 env=cdk.Environment(region=region)
             )
-            kendra_stack.add_dependency(storage_stack)
+            kb_stack.add_dependency(storage_stack)
         elif self.specific_stack == "lambdas":
-            # Para lambdas necesitamos storage y kendra
+            # Para lambdas necesitamos storage y knowledge base
             storage_stack = StorageStack(
                 self,
                 f"{lab_name}-storage",
                 lab_name=lab_name,
                 env=cdk.Environment(region=region)
             )
-            kendra_stack = KendraStack(
+            kb_stack = KnowledgeBaseStack(
                 self,
-                f"{lab_name}-kendra",
+                f"{lab_name}-kb",
                 lab_name=lab_name,
                 documents_bucket=storage_stack.documents_bucket,
-                kendra_role=storage_stack.kendra_role,
                 env=cdk.Environment(region=region)
             )
-            kendra_stack.add_dependency(storage_stack)
+            kb_stack.add_dependency(storage_stack)
             lambda_stack = LambdaStack(
                 self,
                 f"{lab_name}-lambdas",
@@ -82,12 +80,14 @@ class RagLabApp(cdk.App):
                 documents_bucket=storage_stack.documents_bucket,
                 documents_table=storage_stack.documents_table,
                 queries_table=storage_stack.queries_table,
-                kendra_index_id=kendra_stack.kendra_index_id,
-                kendra_index_arn=kendra_stack.kendra_index_arn,
+                knowledge_base_id=kb_stack.knowledge_base.knowledge_base_id,
+                data_source_id=kb_stack.data_source.data_source_id,
+                knowledge_base_arn=kb_stack.knowledge_base_arn,
+                data_source_arn=kb_stack.data_source_arn,
                 env=cdk.Environment(region=region)
             )
             lambda_stack.add_dependency(storage_stack)
-            lambda_stack.add_dependency(kendra_stack)
+            lambda_stack.add_dependency(kb_stack)
         elif self.specific_stack == "api":
             # Para API necesitamos todos los anteriores
             self._deploy_all_stacks(lab_name, region, upload_frontend)
@@ -136,17 +136,16 @@ class RagLabApp(cdk.App):
             env=cdk.Environment(region=region)
         )
         
-        # ==================== KENDRA STACK ====================
-        kendra_stack = KendraStack(
+        # ==================== KNOWLEDGE BASE STACK ====================
+        kb_stack = KnowledgeBaseStack(
             self,
-            f"{lab_name}-kendra",
+            f"{lab_name}-kb",
             lab_name=lab_name,
             documents_bucket=storage_stack.documents_bucket,
-            kendra_role=storage_stack.kendra_role,
             env=cdk.Environment(region=region)
         )
-        kendra_stack.add_dependency(storage_stack)
-        
+        kb_stack.add_dependency(storage_stack)
+
         # ==================== LAMBDA STACK ====================
         lambda_stack = LambdaStack(
             self,
@@ -155,12 +154,14 @@ class RagLabApp(cdk.App):
             documents_bucket=storage_stack.documents_bucket,
             documents_table=storage_stack.documents_table,
             queries_table=storage_stack.queries_table,
-            kendra_index_id=kendra_stack.kendra_index_id,
-            kendra_index_arn=kendra_stack.kendra_index_arn,
+            knowledge_base_id=kb_stack.knowledge_base.knowledge_base_id,
+            data_source_id=kb_stack.data_source.data_source_id,
+            knowledge_base_arn=kb_stack.knowledge_base_arn,
+            data_source_arn=kb_stack.data_source_arn,
             env=cdk.Environment(region=region)
         )
         lambda_stack.add_dependency(storage_stack)
-        lambda_stack.add_dependency(kendra_stack)
+        lambda_stack.add_dependency(kb_stack)
         
         # ==================== API STACK ====================
         api_stack = ApiStack(
@@ -192,7 +193,7 @@ def main():
     parser.add_argument("--lab-name", default="rag-lab", help="Nombre único del laboratorio")
     parser.add_argument("--region", default="eu-west-1", help="Región AWS")
     parser.add_argument("--upload-frontend", action="store_true", help="Subir frontend a S3")
-    parser.add_argument("--stack", default=None, help="Stack específico a desplegar (storage, kendra, lambdas, api, frontend)")
+    parser.add_argument("--stack", default=None, help="Stack específico a desplegar (storage, knowledgebase, lambdas, api, frontend)")
     
     args = parser.parse_args()
     

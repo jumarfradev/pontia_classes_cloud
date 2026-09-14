@@ -1,6 +1,6 @@
 """
 Query Handler Lambda
-Realiza búsquedas en Kendra y genera respuestas con Bedrock
+Realiza búsquedas en Bedrock Knowledge Base y genera respuestas con Bedrock
 """
 
 import json
@@ -10,13 +10,17 @@ from datetime import datetime
 import uuid
 import re
 
-kendra_client = boto3.client("kendra")
-bedrock_client = boto3.client("bedrock-runtime")
+bedrock_agent_runtime_client = boto3.client("bedrock-agent-runtime")
 dynamodb = boto3.resource("dynamodb")
 
 DOCUMENTS_TABLE = os.environ["DOCUMENTS_TABLE"]
 QUERIES_TABLE = os.environ["QUERIES_TABLE"]
-KENDRA_INDEX_ID = os.environ["KENDRA_INDEX_ID"]
+KNOWLEDGE_BASE_ID = os.environ["KNOWLEDGE_BASE_ID"]
+
+# Modelo de generacion. Ajusta segun disponibilidad en tu region/cuenta de Bedrock.
+# En eu-west-1, muchos modelos requieren el ID del inference profile (prefijo eu./global.).
+# Ejemplos validos: eu.amazon.nova-2-lite-v1:0, eu.anthropic.claude-3-haiku-20240307-v1:0
+GENERATION_MODEL_ID = "eu.amazon.nova-2-lite-v1:0"
 
 documents_table = dynamodb.Table(DOCUMENTS_TABLE)
 queries_table = dynamodb.Table(QUERIES_TABLE)
@@ -25,19 +29,17 @@ queries_table = dynamodb.Table(QUERIES_TABLE)
 def lambda_handler(event, context):
     """
     Maneja búsquedas RAG
-    
+
     Flujo:
     1. Recibe pregunta desde API
-    2. Busca en Kendra
-    3. Construye contexto
-    4. Invoca Bedrock (Claude 3)
-    5. Guarda en DynamoDB
-    6. Retorna respuesta
+    2. Busca en Bedrock Knowledge Base (retrieve_and_generate)
+    3. Guarda en DynamoDB
+    4. Retorna respuesta con fuentes
     """
-    
+
     print(f"Event: {json.dumps(event)}")
     print(f"Headers recibidos: {event.get('headers', {})}")
-    
+
     try:
         # ==================== PARSE REQUEST ====================
         if event.get("httpMethod") == "OPTIONS":
@@ -54,108 +56,81 @@ def lambda_handler(event, context):
             }
             print(f"Response OPTIONS: {json.dumps(response)}")
             return response
-        
+
         if event.get("httpMethod") != "POST":
             return error_response(400, "Método no permitido")
-        
+
         body = json.loads(event.get("body", "{}"))
         question = body.get("question", "").strip()
-        
+
         if not question:
             return error_response(400, "question es requerido")
-        
-        # ==================== BUSCAR EN KENDRA ====================
-        print(f"Buscando en Kendra: {question}")
-        
-        try:
-            kendra_response = kendra_client.query(
-                IndexId=KENDRA_INDEX_ID,
-                QueryText=question,
-                PageSize=5,
-            )
-            
-            results = kendra_response.get("ResultItems", [])
-            print(f"Resultados de Kendra: {len(results)}")
-        except Exception as e:
-            print(f"Error al buscar en Kendra: {str(e)}")
-            results = []
-        
-        # ==================== CONSTRUIR CONTEXTO ====================
-        context_text = ""
+
+        # ==================== BUSCAR + GENERAR CON BEDROCK KB ====================
+        print(f"Consultando Bedrock Knowledge Base: {question}")
+
+        region = boto3.session.Session().region_name or "eu-west-1"
+        # Si el ID empieza con eu. o global. es un inference profile; se usa tal cual.
+        # En caso contrario se asume un foundation model estandar.
+        if GENERATION_MODEL_ID.startswith(("eu.", "global.", "us.", "apac.", "us-gov-")):
+            model_arn = GENERATION_MODEL_ID
+        else:
+            model_arn = f"arn:aws:bedrock:{region}::foundation-model/{GENERATION_MODEL_ID}"
+
         sources = []
-        
-        for i, result in enumerate(results, 1):
-            document_text = result.get("DocumentExcerpt", {}).get("Text", "")
-            document_id = result.get("DocumentId", "unknown")
-            score = result.get("ScoreAttributes", {}).get("ScoreConfidence", "UNKNOWN")
-            
-            if document_text:
-                context_text += f"\n[Fuente {i}] (Relevancia: {score})\n{document_text}\n"
-                sources.append({
-                    "document_id": document_id,
-                    "score": score,
-                    "excerpt": document_text[:200],
-                })
-        
-        if not context_text:
-            print("Kendra no encontró resultados, buscando directamente en S3...")
-            context_text = search_documents_in_s3(question)
-            if context_text:
-                print(f"Se encontró contenido relevante en S3")
+        answer = ""
+        kb_results_count = 0
+
+        try:
+            kb_response = bedrock_agent_runtime_client.retrieve_and_generate(
+                input={"text": question},
+                retrieveAndGenerateConfiguration={
+                    "type": "KNOWLEDGE_BASE",
+                    "knowledgeBaseConfiguration": {
+                        "knowledgeBaseId": KNOWLEDGE_BASE_ID,
+                        "modelArn": model_arn,
+                    },
+                },
+            )
+
+            answer = kb_response.get("output", {}).get("text", "")
+            citations = kb_response.get("citations", [])
+            kb_results_count = len(citations)
+            print(f"Respuesta generada ({len(answer)} chars) | Citas: {kb_results_count}")
+
+            for i, citation in enumerate(citations, 1):
+                for ref in citation.get("retrievedReferences", []):
+                    location = ref.get("location", {}).get("s3Location", {})
+                    uri = location.get("uri", "unknown")
+                    text = ref.get("content", {}).get("text", "")
+                    sources.append({
+                        "document_id": uri.split("/")[-1] if uri else "unknown",
+                        "score": 1.0,
+                        "excerpt": text[:200] if text else f"Fuente {i}",
+                    })
+        except Exception as e:
+            print(f"Error al consultar Bedrock KB: {str(e)}")
+            answer = f"Error al consultar la base de conocimiento: {str(e)}"
+
+        # Fallback simple si Bedrock KB no retorna fuentes
+        if not sources:
+            print("Bedrock KB no retorno fuentes, intentando fallback directo en S3...")
+            fallback_context = search_documents_in_s3(question)
+            if fallback_context:
+                answer = (
+                    f"{answer}\n\n(Nota: la respuesta se basa en una búsqueda directa "
+                    f"mientras finaliza la indexación de Bedrock KB)\n\n{fallback_context}"
+                )
                 sources.append({
                     "document_id": "direct-search",
                     "score": 1.0,
-                    "excerpt": context_text[:200],
+                    "excerpt": fallback_context[:200],
                 })
-            else:
-                context_text = "No se encontraron documentos relevantes en la base de conocimiento."
-        
-        # ==================== INVOCAR BEDROCK ====================
-        print("Invocando Bedrock para generar respuesta...")
-        
-        system_prompt = """Eres un asistente experto que responde preguntas basándose en documentos proporcionados.
-Proporciona respuestas claras, concisas y bien estructuradas.
-Si la información no está en los documentos, indícalo claramente.
-Siempre cita las fuentes de donde obtuviste la información."""
-        
-        user_message = f"""Pregunta: {question}
 
-Contexto de los documentos:
-{context_text}
-
-Por favor, responde la pregunta basándote en el contexto proporcionado."""
-        
-        try:
-            bedrock_response = bedrock_client.invoke_model(
-                modelId="global.amazon.nova-2-lite-v1:0",
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps({
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "text": user_message
-                                }
-                            ]
-                        }
-                    ]
-                }),
-            )
-            
-            response_body = json.loads(bedrock_response["body"].read())
-            answer = response_body["output"]["message"]["content"][0]["text"]
-            
-            print(f"Respuesta generada: {answer[:100]}...")
-        except Exception as e:
-            print(f"Error al invocar Bedrock: {str(e)}")
-            answer = f"Error al generar respuesta: {str(e)}"
-        
         # ==================== GUARDAR EN DYNAMODB ====================
         query_id = f"query-{str(uuid.uuid4())[:8]}"
         timestamp = datetime.utcnow().isoformat()
-        
+
         try:
             queries_table.put_item(
                 Item={
@@ -164,13 +139,13 @@ Por favor, responde la pregunta basándote en el contexto proporcionado."""
                     "question": question,
                     "answer": answer,
                     "sources": sources,
-                    "kendra_results_count": len(results),
+                    "kb_results_count": kb_results_count,
                 }
             )
             print(f"Query guardada en DynamoDB: {query_id}")
         except Exception as e:
             print(f"Error al guardar query: {str(e)}")
-        
+
         # ==================== RESPUESTA ====================
         return success_response(
             200,
@@ -182,7 +157,7 @@ Por favor, responde la pregunta basándote en el contexto proporcionado."""
                 "timestamp": timestamp,
             },
         )
-    
+
     except Exception as e:
         print(f"Error no controlado: {str(e)}")
         return error_response(500, f"Error interno: {str(e)}")
@@ -205,59 +180,62 @@ def success_response(status_code, body):
 
 
 def search_documents_in_s3(question):
-    """Busca directamente en los documentos PDF de S3 cuando Kendra no encuentra resultados"""
+    """Busca directamente en los documentos de S3 cuando Bedrock KB aun no tiene resultados"""
     try:
         s3_client = boto3.client("s3")
-        
+
         # Obtener todos los documentos de DynamoDB
         response = documents_table.scan()
         documents = response.get("Items", [])
-        
+
         if not documents:
             return ""
-        
+
         # Extraer palabras clave de la pregunta
         keywords = re.findall(r'\b\w+\b', question.lower())
-        keywords = [word for word in keywords if len(word) > 3]  # Filtrar palabras cortas
-        
+        keywords = [word for word in keywords if len(word) > 3]
+
         if not keywords:
             return ""
-        
+
         relevant_content = ""
-        
+
         for doc in documents:
-            if doc.get("status") == "completed":
+            if doc.get("status") == "processing":
                 try:
-                    # Extraer key del S3 path
                     s3_path = doc.get("s3_path", "")
                     if "s3://" in s3_path:
                         bucket_key = s3_path.replace("s3://", "").split("/", 1)
                         if len(bucket_key) == 2:
                             bucket_name, object_key = bucket_key
-                            
-                            # Descargar PDF y extraer texto (simplificado)
                             obj = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-                            pdf_content = obj['Body'].read()
-                            
-                            # Para este ejemplo, asumimos que tenemos acceso al texto
-                            # En producción, usaríamos Textract o PyPDF2 en Lambda
-                            content_preview = f"Contenido del documento {doc.get('filename', 'unknown')}"
-                            
-                            # Buscar palabras clave en el contenido
-                            content_lower = content_preview.lower()
-                            keyword_matches = sum(1 for keyword in keywords if keyword in content_lower)
-                            
-                            if keyword_matches > 0:
-                                relevance = keyword_matches / len(keywords)
-                                if relevance > 0.3:  # Umbral de relevancia
-                                    relevant_content += f"\n[Documento: {doc.get('filename')}] (Relevancia: {relevance:.0%})\n{content_preview}\n"
-                
+                            content = obj["Body"].read()
+
+                            # Solo indexamos archivos de texto plano en el fallback
+                            if doc.get("filename", "").lower().endswith(".txt"):
+                                text = content.decode("utf-8", errors="ignore")
+                                content_lower = text.lower()
+                                keyword_matches = sum(1 for keyword in keywords if keyword in content_lower)
+                                if keyword_matches > 0:
+                                    relevance = keyword_matches / len(keywords)
+                                    if relevance > 0.3:
+                                        relevant_content += (
+                                            f"\n[Documento: {doc.get('filename')}] "
+                                            f"(Relevancia: {relevance:.0%})\n{text[:1000]}\n"
+                                        )
+                            else:
+                                # Para PDFs mostramos solo que existen
+                                relevant_content += (
+                                    f"\n[Documento: {doc.get('filename')}] "
+                                    "(PDF pendiente de indexar en Bedrock KB)\n"
+                                )
+
                 except Exception as e:
                     print(f"Error procesando documento {doc.get('document_id')}: {str(e)}")
                     continue
-        
-        return relevant_content[:2000] if relevant_content else ""  # Limitar contenido
-        
+
+        return relevant_content[:2000] if relevant_content else ""
+
     except Exception as e:
         print(f"Error en búsqueda directa en S3: {str(e)}")
         return ""

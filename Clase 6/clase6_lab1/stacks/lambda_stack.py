@@ -17,7 +17,7 @@ import os
 
 class LambdaStack(cdk.Stack):
     """Stack para Lambda Functions"""
-    
+
     def __init__(
         self,
         scope: Construct,
@@ -26,14 +26,16 @@ class LambdaStack(cdk.Stack):
         documents_bucket: s3.Bucket,
         documents_table: dynamodb.Table,
         queries_table: dynamodb.Table,
-        kendra_index_id: str,
-        kendra_index_arn: str,
+        knowledge_base_id: str,
+        data_source_id: str,
+        knowledge_base_arn: str,
+        data_source_arn: str,
         **kwargs
     ):
         super().__init__(scope, construct_id, **kwargs)
-        
+
         self.lab_name = lab_name
-        
+
         # ==================== IAM ROLE PARA LAMBDAS ====================
         lambda_role = iam.Role(
             self,
@@ -46,7 +48,7 @@ class LambdaStack(cdk.Stack):
                 )
             ],
         )
-        
+
         # Permisos S3
         lambda_role.add_to_policy(
             iam.PolicyStatement(
@@ -58,7 +60,7 @@ class LambdaStack(cdk.Stack):
                 ],
             )
         )
-        
+
         # Permisos DynamoDB
         lambda_role.add_to_policy(
             iam.PolicyStatement(
@@ -75,29 +77,56 @@ class LambdaStack(cdk.Stack):
                 ],
             )
         )
-        
-        # Permisos Kendra
+
+        # Permisos Bedrock Agent Runtime: retrieve + retrieve_and_generate sobre la KB
         lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
                 actions=[
-                    "kendra:Query",
-                    "kendra:BatchPutDocument",
-                    "kendra:StartDataSourceSyncJob",
+                    "bedrock:Retrieve",
+                    "bedrock:RetrieveAndGenerate",
                 ],
-                resources=[kendra_index_arn],
+                resources=[knowledge_base_arn],
             )
         )
-        
-        # Permisos Bedrock
+
+        # Permisos para usar inference profiles de Bedrock (necesario para modelos como Nova/Claude en eu-west-1)
         lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
-                actions=["bedrock:*"],
+                actions=[
+                    "bedrock:GetInferenceProfile",
+                    "bedrock:InvokeModel",
+                ],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/*",
+                    f"arn:aws:bedrock:{self.region}::foundation-model/*",
+                ],
+            )
+        )
+
+        # Permisos Bedrock Agent: iniciar sincronizacion del data source
+        lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "bedrock:StartIngestionJob",
+                    "bedrock:ListIngestionJobs",
+                    "bedrock:GetIngestionJob",
+                ],
+                resources=[data_source_arn, knowledge_base_arn],
+            )
+        )
+
+        # Permisos para invocar modelos base de Bedrock (generation)
+        lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["bedrock:InvokeModel"],
                 resources=["*"],
             )
         )
-        
+
         # ==================== LAMBDA: UPLOAD HANDLER ====================
         self.upload_function = lambda_.Function(
             self,
@@ -111,14 +140,15 @@ class LambdaStack(cdk.Stack):
             environment={
                 "DOCUMENTS_BUCKET": documents_bucket.bucket_name,
                 "DOCUMENTS_TABLE": documents_table.table_name,
-                "KENDRA_INDEX_ID": kendra_index_id,
+                "KNOWLEDGE_BASE_ID": knowledge_base_id,
+                "DATA_SOURCE_ID": data_source_id,
             },
             code=lambda_.Code.from_asset(
                 os.path.join(os.path.dirname(__file__), "../lambdas"),
                 exclude=["*.pyc", "__pycache__"],
             ),
         )
-        
+
         # ==================== LAMBDA: QUERY HANDLER ====================
         self.query_function = lambda_.Function(
             self,
@@ -132,7 +162,7 @@ class LambdaStack(cdk.Stack):
             environment={
                 "DOCUMENTS_TABLE": documents_table.table_name,
                 "QUERIES_TABLE": queries_table.table_name,
-                "KENDRA_INDEX_ID": kendra_index_id,
+                "KNOWLEDGE_BASE_ID": knowledge_base_id,
             },
             code=lambda_.Code.from_asset(
                 os.path.join(os.path.dirname(__file__), "../lambdas"),

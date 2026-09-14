@@ -67,42 +67,6 @@ class StorageStack(cdk.Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
         
-        # ==================== IAM ROLE PARA KENDRA ====================
-        self.kendra_role = iam.Role(
-            self,
-            "KendraRole",
-            role_name=f"{lab_name}-kendra-role",
-            assumed_by=iam.ServicePrincipal("kendra.amazonaws.com"),
-        )
-        
-        # Permisos para acceder a S3
-        self.kendra_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "s3:GetObject",
-                    "s3:ListBucket",
-                ],
-                resources=[
-                    self.documents_bucket.bucket_arn,
-                    self.documents_bucket.arn_for_objects("*"),
-                ],
-            )
-        )
-        
-        # Permisos para CloudWatch Logs (requerido por Kendra)
-        self.kendra_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "logs:CreateLogGroup",
-                    "logs:CreateLogStream",
-                    "logs:PutLogEvents",
-                ],
-                resources=["*"],
-            )
-        )
-        
         # ==================== OUTPUTS ====================
         cdk.CfnOutput(
             self,
