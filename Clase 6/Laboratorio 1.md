@@ -159,16 +159,36 @@ cdk bootstrap aws://ACCOUNT_ID/eu-west-1
 
 ---
 
-### Paso 7 – Desplegar Stack a Stack
+### Paso 7 – Configurar tu nombre en cdk.json
 
-Desplegaremos la infraestructura paso a paso para monitorear el progreso.
+Antes de desplegar, edita el fichero `cdk.json` y cambia `lab_name` con tu nombre o apellido:
 
-#### 7.1 – Desplegar Storage Stack
+```json
+{
+  "app": "python3 cdk_app.py",
+  "context": {
+    "lab_name": "rag-lab-alumno",
+    "region": "eu-west-1",
+    "upload_frontend": false
+  }
+}
+```
+
+> **👉** Cambia `rag-lab-alumno` por algo único, por ejemplo `rag-lab-garcia`. Esto evita colisiones de nombres en S3 y DynamoDB.
+
+---
+
+### Paso 8 – Desplegar Stack a Stack
+
+Desplegaremos la infraestructura paso a paso. Los parámetros se leen automáticamente de `cdk.json`.
+
+#### 8.1 – Desplegar Storage Stack
 
 ```bash
-# Reemplaza "alumno" con tu nombre o apellido
-cdk deploy --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack storage" --require-approval never
+cdk deploy rag-lab-alumno-storage --require-approval never
 ```
+
+> **💡 Nota:** El nombre del stack debe coincidir con el `lab_name` de `cdk.json` + `-storage`.
 
 **Qué se crea:**
 - S3 Bucket para documentos: `rag-lab-alumno-documents-{ACCOUNT_ID}`
@@ -179,10 +199,10 @@ cdk deploy --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack storage" 
 
 > **✅ Resultado:** Storage desplegado correctamente.
 
-#### 7.2 – Desplegar Knowledge Base Stack
+#### 8.2 – Desplegar Knowledge Base Stack
 
 ```bash
-cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack knowledgebase" --require-approval never
+cdk deploy rag-lab-alumno-storage rag-lab-alumno-kb --require-approval never
 ```
 
 **Qué se crea:**
@@ -194,10 +214,10 @@ cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack kno
 
 > **✅ Resultado:** Knowledge Base creada y lista para indexar documentos.
 
-#### 7.3 – Desplegar Lambda Stack
+#### 8.3 – Desplegar Lambda Stack
 
 ```bash
-cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack lambdas" --require-approval never
+cdk deploy rag-lab-alumno-storage rag-lab-alumno-kb rag-lab-alumno-lambdas --require-approval never
 ```
 
 **Qué se crea:**
@@ -209,10 +229,10 @@ cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack lam
 
 > **✅ Resultado:** Lambda Functions desplegadas y configuradas.
 
-#### 7.4 – Desplegar API Stack
+#### 8.4 – Desplegar API Stack
 
 ```bash
-cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack api" --require-approval never
+cdk deploy rag-lab-alumno-storage rag-lab-alumno-kb rag-lab-alumno-lambdas rag-lab-alumno-api --require-approval never
 ```
 
 **Qué se crea:**
@@ -229,12 +249,25 @@ cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack api
 
 ---
 
-### Paso 8 – Desplegar Frontend Stack
+### Paso 9 – Desplegar Frontend Stack
 
-Ahora que el backend está completamente desplegado, subiremos el frontend al bucket S3.
+Ahora que el backend está completamente desplegado, subiremos el frontend. Primero pon `upload_frontend` a `true` en `cdk.json`:
+
+```json
+{
+  "app": "python3 cdk_app.py",
+  "context": {
+    "lab_name": "rag-lab-alumno",
+    "region": "eu-west-1",
+    "upload_frontend": true
+  }
+}
+```
+
+Luego despliega todos los stacks a la vez:
 
 ```bash
-cdk deploy --all --app "python3 cdk_app.py --lab-name rag-lab-alumno --stack frontend --upload-frontend" --require-approval never
+cdk deploy --all --require-approval never
 ```
 
 Este comando:

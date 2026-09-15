@@ -5,8 +5,6 @@ Despliegue completo de una aplicación RAG con Bedrock Knowledge Base, Lambda, A
 """
 
 import aws_cdk as cdk
-import sys
-import argparse
 from aws_cdk import aws_s3 as s3
 from stacks.storage_stack import StorageStack
 from stacks.knowledge_base_stack import KnowledgeBaseStack
@@ -16,11 +14,28 @@ from stacks.frontend_stack import FrontendStack
 
 
 class RagLabApp(cdk.App):
-    """Aplicación CDK para RAG Lab"""
+    """Aplicación CDK para RAG Lab.
+
+    Lee la configuración del contexto CDK (cdk.json o flags -c) con
+    fallback a argumentos de línea de comandos para compatibilidad.
+
+    Uso recomendado:
+        cdk deploy --all
+        cdk deploy --all -c lab_name=rag-lab-alumno
+        cdk deploy --all -c lab_name=rag-lab-alumno -c stack=storage
+    """
     
-    def __init__(self, lab_name: str, region: str, upload_frontend: bool, specific_stack: str = None):
-        super().__init__()
-        
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Leer configuracion del contexto CDK (cdk.json o -c flags)
+        lab_name       = (self.node.try_get_context("lab_name") or "rag-lab").lower()
+        region         = self.node.try_get_context("region")         or "eu-west-1"
+        specific_stack = self.node.try_get_context("stack")          or None
+        ctx_upload     = self.node.try_get_context("upload_frontend")
+        # upload_frontend solo activo si se pasa explicitamente como true en contexto
+        upload_frontend = (ctx_upload is True)
+
         self.lab_name = lab_name
         self.aws_region = region
         self.upload_frontend = upload_frontend
@@ -89,8 +104,8 @@ class RagLabApp(cdk.App):
             lambda_stack.add_dependency(storage_stack)
             lambda_stack.add_dependency(kb_stack)
         elif self.specific_stack == "api":
-            # Para API necesitamos todos los anteriores
-            self._deploy_all_stacks(lab_name, region, upload_frontend)
+            # Para API necesitamos todos los anteriores (sin frontend)
+            self._deploy_all_stacks(lab_name, region, upload_frontend=False)
         elif self.specific_stack == "frontend":
             # Para frontend solo necesitamos recuperar el API endpoint
             self._deploy_frontend_only(lab_name, region)
@@ -175,40 +190,18 @@ class RagLabApp(cdk.App):
         api_stack.add_dependency(lambda_stack)
         
         # ==================== FRONTEND STACK ====================
-        # Convertir el endpoint a string para evitar referencias cruzadas
-        api_endpoint_str = str(api_stack.api_endpoint)
-        frontend_stack = FrontendStack(
-            self,
-            f"{lab_name}-frontend",
-            lab_name=lab_name,
-            api_endpoint=api_endpoint_str,
-            env=cdk.Environment(region=region)
-        )
-        frontend_stack.add_dependency(api_stack)
-
-
-def main():
-    """Función principal"""
-    parser = argparse.ArgumentParser(description="RAG Lab CDK Deployment")
-    parser.add_argument("--lab-name", default="rag-lab", help="Nombre único del laboratorio")
-    parser.add_argument("--region", default="eu-west-1", help="Región AWS")
-    parser.add_argument("--upload-frontend", action="store_true", help="Subir frontend a S3")
-    parser.add_argument("--stack", default=None, help="Stack específico a desplegar (storage, knowledgebase, lambdas, api, frontend)")
-    
-    args = parser.parse_args()
-    
-    # Si no se especifica un stack específico (--all), activar upload_frontend por defecto
-    upload_frontend = args.upload_frontend or args.stack is None
-    
-    app = RagLabApp(
-        lab_name=args.lab_name,
-        region=args.region,
-        upload_frontend=upload_frontend,
-        specific_stack=args.stack
-    )
-    
-    app.synth()
+        if upload_frontend:
+            api_endpoint_str = str(api_stack.api_endpoint)
+            frontend_stack = FrontendStack(
+                self,
+                f"{lab_name}-frontend",
+                lab_name=lab_name,
+                api_endpoint=api_endpoint_str,
+                env=cdk.Environment(region=region)
+            )
+            frontend_stack.add_dependency(api_stack)
 
 
 if __name__ == "__main__":
-    main()
+    app = RagLabApp()
+    app.synth()

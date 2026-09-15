@@ -1,8 +1,8 @@
 {
   "app": "python3 cdk_app.py",
   "context": {
-    "lab_name": "rag-lab",
+    "lab_name": "rag-lab-alumno",
     "region": "eu-west-1",
-    "upload_frontend": false
+    "upload_frontend": true
   }
 }
