@@ -118,7 +118,7 @@ class SeguridadObraStack(cdk.Stack):
             self,
             f"{self.project_name}-Analyzer",
             function_name=f"{self.project_name}-analyzer",
-            runtime=lambda_.Runtime.PYTHON_3_9,
+            runtime=lambda_.Runtime.PYTHON_3_12,
             handler="lambda_function.lambda_handler",
             role=self.lambda_role,
             code=lambda_.Code.from_asset("lambdas"),
@@ -173,11 +173,23 @@ class SeguridadObraStack(cdk.Stack):
         )
 
     def deploy_frontend(self):
-        """Desplegar frontend en S3"""
+        """Desplegar frontend en S3, sustituyendo API_URL por la URL real del API Gateway"""
+        # Leer app.js local y reemplazar el placeholder con la URL real
+        frontend_dir = os.path.join(os.path.dirname(__file__), "..", "frontend")
+        app_js_path = os.path.join(frontend_dir, "app.js")
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js_content = f.read()
+
+        api_url = f"{self.api.url}analyze"
+        app_js_patched = app_js_content.replace("'API_URL'", f"'{api_url}'")
+
         s3deploy.BucketDeployment(
             self,
             f"{self.project_name}-FrontendDeployment",
-            sources=[s3deploy.Source.asset("frontend")],
+            sources=[
+                s3deploy.Source.asset(frontend_dir),              # sube index.html y app.js original
+                s3deploy.Source.data("app.js", app_js_patched),   # sobreescribe app.js con la URL real
+            ],
             destination_bucket=self.s3_bucket,
             destination_key_prefix="",
             retain_on_delete=False,
